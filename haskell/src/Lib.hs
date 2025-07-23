@@ -5,6 +5,7 @@ module Lib
 import Control.Exception (try, SomeException)
 import qualified Data.ByteString.Lazy.Char8 as BL
 import Data.Aeson (Value, (.=), object, encode)
+import Data.Time.Clock (getCurrentTime)
 import System.Exit (ExitCode(..))
 import System.IO
 import System.Process
@@ -30,6 +31,7 @@ renderWithJinja templateStr contextJson = do
   let inputJson = encode input
 
   result <- try $ do
+    startTime <- getCurrentTime
     -- Start the subprocess with template string as argument
     let processSpec = (proc renderJinjaBin [])
           { std_in = CreatePipe
@@ -47,6 +49,10 @@ renderWithJinja templateStr contextJson = do
     output <- hGetContents hOut
     errput <- hGetContents hErr
     exitCode <- waitForProcess pHandle
+    endTime <- getCurrentTime
+
+    print startTime
+    print endTime
 
     case exitCode of
       ExitSuccess   -> return $ Right output
