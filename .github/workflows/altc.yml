@@ -1,0 +1,84 @@
+name: Alternative with C
+
+on:
+  push:
+
+jobs:
+  python:
+    name: Build C Library
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: 3.13
+        cache: pip
+        cache-dependency-path: |
+          **/pyproject.toml
+          **/requirements*.txt
+
+    - name: Install Python dependencies
+      run: |
+        python -m pip install -U pip setuptools wheel
+        pip install -r ./python/requirements.txt
+
+    - name: Prepare ~/.local/bin
+      run: |
+        mkdir -p ~/.local/bin
+        export PATH=~/.local/bin:$PATH
+
+    - name: Cache ~/.stack
+      id: cache-stack
+      uses: actions/cache@v3
+      with:
+        path: ~/.stack
+        key: stack-home-ubuntu22-${{ hashFiles('**/package.yaml')}}-${{ hashFiles('**/stack.yaml*') }}
+        restore-keys: |
+          stack-home-ubuntu22-
+
+    - name: Cache haskell dir
+      id: cache-haskell
+      uses: actions/cache@v3
+      with:
+        path: haskell/.stack-work
+        key: haskell-dir-ubuntu22-${{ hashFiles('haskell/package.yaml')}}-${{ hashFiles('haskell/**/*.hs') }}
+        restore-keys: |
+          haskell-dir-ubuntu22-${{ hashFiles('haskell/package.yaml')}}-
+          haskell-dir-ubuntu22-
+
+    - name: Cache Stack in ~/.local/bin
+      id: cache-stack-local-bin
+      uses: actions/cache@v3
+      with:
+        path: ~/.local/bin
+        key: stack-local-bin-ubuntu22-3.1.1
+
+    - name: Setup stack
+      if: steps.cache-stack-local-bin.outputs.cache-hit != 'true'
+      run: |
+        curl -L https://github.com/commercialhaskell/stack/releases/download/v$STACK_VERSION/stack-$STACK_VERSION-linux-x86_64.tar.gz | tar xz --wildcards --strip-components=1 -C ~/.local/bin '*/stack';
+
+    - name: Install GHC and dependencies
+      run: |
+        cd haskell-c-python
+        stack build --no-terminal --install-ghc --only-dependencies
+
+    - name: Build C
+      run: |
+        cd haskell-c-python/jinja
+        gcc -fPIC -shared -o libjinja.so jinja.c $(python3-config --includes --ldflags)
+        ls -lah
+
+    - name: Build app
+      run: |
+        cd haskell-c-python
+        stack build --verbose --no-terminal --skip-ghc-check 2>&1
+
+    - name: Try it
+      run: |
+        cd haskell-c-python
+        echo "World" | stack exec hello-jinja-exe

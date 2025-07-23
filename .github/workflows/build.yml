@@ -78,7 +78,7 @@ jobs:
       id: cache-haskell
       uses: actions/cache@v3
       with:
-        path: wizard-server/.stack-work
+        path: haskell/.stack-work
         key: haskell-dir-ubuntu22-${{ hashFiles('haskell/package.yaml')}}-${{ hashFiles('haskell/**/*.hs') }}
         restore-keys: |
           haskell-dir-ubuntu22-${{ hashFiles('haskell/package.yaml')}}-
