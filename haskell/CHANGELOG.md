@@ -1,4 +1,4 @@
-# Changelog for `hJinja`
+# Changelog for `haskell-lib`
 
 All notable changes to this project will be documented in this file.
 

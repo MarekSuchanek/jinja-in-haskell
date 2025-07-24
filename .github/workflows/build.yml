@@ -4,8 +4,8 @@ on:
   push:
 
 jobs:
-  python:
-    name: Build Python
+  libs:
+    name: Build Libraries
     runs-on: ubuntu-22.04
 
     steps:
@@ -15,7 +15,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: 3.13
+        python-version: '3.10'
         cache: pip
         cache-dependency-path: |
           **/pyproject.toml
@@ -27,34 +27,54 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install -r ./python/requirements.txt
+        pip install -r ./jinja/requirements.txt
 
     - name: Install Nuitka
       run: |
         pip install Nuitka==2.7.12
 
-    - name: Build binary with Nuitka
+    - name: Build library with Nuitka
       run: |
-        DIR_LIBS=$Python_ROOT_DIR/lib/python3.13/site-packages
+        DIR_LIBS=$Python_ROOT_DIR/lib/python3.10/site-packages
         ls -lah $DIR_LIBS
-        nuitka --static-libpython=no --onefile --follow-imports \
-               --include-plugin-directory=$DIR_LIBS/jinja2 \
-               python/render_jinja.py
-        mv ./render_jinja.bin ./render-jinja
+        cd jinja
+        nuitka --module wizardjinja.py
+        ls -lah
 
-    - name: Upload binary
+    - name: Build wrapper library
+      run: |
+        cd jinja
+        gcc -fPIC -shared -o libjinja.so wizardjinja.c -I$(python3-config --includes) -L$(python3-config --prefix)/lib -lpython3.10
+        ls -lah
+    
+    - name: Upload libraries
       uses: actions/upload-artifact@v4
       with:
-        name: render_jinja_bin
-        path: ./render-jinja
+        name: libjinja
+        path: |
+          jinja/*.so
 
   haskell:
     name: Build Haskell
     runs-on: ubuntu-22.04
+    needs: libs
 
     steps:
     - name: Checkout git repository
       uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: pip
+        cache-dependency-path: |
+          **/pyproject.toml
+          **/requirements*.txt
+
+    - name: Install dependencies
+      run: |
+        pip install -r ./jinja/requirements.txt
 
     - name: Fetch all git history
       run: |
@@ -96,28 +116,58 @@ jobs:
       run: |
         curl -L https://github.com/commercialhaskell/stack/releases/download/v$STACK_VERSION/stack-$STACK_VERSION-linux-x86_64.tar.gz | tar xz --wildcards --strip-components=1 -C ~/.local/bin '*/stack';
 
+    - name: Download libraries
+      uses: actions/download-artifact@v4
+      with:
+        name: libjinja
+
+    - name: Check lib contents
+      run: |
+        mkdir -p ./haskell/lib
+        mv ./*.so haskell/lib/
+        ls -lah haskell/lib/
+
     - name: Install GHC and dependencies
       run: |
         cd haskell
         stack build --no-terminal --install-ghc --only-dependencies
 
-    - name: Build and test application
+    - name: Build application
       run: |
         cd haskell
         stack build --no-terminal --skip-ghc-check 2>&1
-        cp $(stack path --local-install-root)/bin/hello-jinja-exe ../hello-jinja
+        cp $(stack path --local-install-root)/bin/haskell-jinja-exe ./haskell-jinja
+        ls -lah
 
-    - name: Upload binary
+    - name: Try application
+      run: |
+        cd haskell
+        ls -lah $(pwd)/lib
+        PYTHONPATH=$(pwd)/lib LD_LIBRARY_PATH=$PWD/lib:$LD_LIBRARY_PATH ./haskell-jinja
+
+    - name: Stack test
+      run: |
+        cd haskell
+        PYTHONPATH=$(pwd)/lib LD_LIBRARY_PATH=$PWD/lib:$LD_LIBRARY_PATH stack test --no-terminal --skip-ghc-check
+
+    - name: Create dist
+      run: |
+        mkdir -p dist
+        cp haskell/haskell-jinja dist/
+        cp -r haskell/lib dist/
+
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: hello_jinja_bin
-        path: ./hello-jinja
+        name: dist
+        path: |
+          dist/
 
   docker:
     name: Build Docker image
     runs-on: ubuntu-22.04
 
-    needs: [python, haskell]
+    needs: [haskell]
 
     env:
       IMAGE_NAME: jinja-in-haskell
@@ -132,25 +182,18 @@ jobs:
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v2
 
-    - name: Download Python binary
+    - name: Download dist
       uses: actions/download-artifact@v4
       with:
-        name: render_jinja_bin
-
-    - name: Download Haskell binary
-      uses: actions/download-artifact@v4
-      with:
-        name: hello_jinja_bin
-
-    - name: Change permissions
-      run: |
-        chmod +x ./render-jinja
-        chmod +x ./hello-jinja
+        name: dist
 
     - name: Check local contents
       run: |
-        ls -lah ./render-jinja
-        ls -lah ./hello-jinja
+        mkdir -p dist
+        mv lib dist/
+        mv haskell-jinja dist/
+        chmod +x dist/haskell-jinja
+        ls -lah ./dist
 
     - name: Docker meta [test]
       id: meta-test
@@ -186,6 +229,7 @@ jobs:
         images: |
           ${{ secrets.DOCKER_HUB_USERNAME }}/${{ env.IMAGE_NAME }}
         tags: |
+          type=ref,event=branch
           type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
           type=semver,pattern={{version}}
           type=semver,pattern={{major}}.{{minor}}
@@ -201,4 +245,3 @@ jobs:
         push: true
         tags: ${{ steps.meta-public.outputs.tags }}
         labels: ${{ steps.meta-public.outputs.labels }}
-
